@@ -1,20 +1,20 @@
-// api/gemini.js - FINAL VERSION
-// SiliconFlow + Hugging Face - No Gemini
+// api/gemini.js - FINAL PRODUCTION VERSION
+// SiliconFlow + Hugging Face - Zero Cost, Maximum Power
 
 export default async function handler(req, res) {
-  // CORS headers
+  // CORS headers - browser access के लिए जरूरी
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
 
-  // Handle preflight
+  // Handle preflight OPTIONS request
   if (req.method === 'OPTIONS') {
     return res.status(200).end();
   }
 
-  // Only POST allowed
+  // Only allow POST
   if (req.method !== 'POST') {
-    return res.status(405).json({
+    return res.status(200).json({
       candidates: [{
         content: {
           parts: [{ text: "Method not allowed. Please use POST." }]
@@ -25,12 +25,24 @@ export default async function handler(req, res) {
 
   try {
     const payload = req.body;
+    console.log('📥 Received:', JSON.stringify(payload).substring(0, 200));
+
     const { mode, contents, prompt, systemInstruction } = payload;
 
-    // 🚀 MODE 1: CHAT / TEXT (Llama-3.1-8B)
+    // ---------- MODE 1: TEXT / CHAT (SiliconFlow - Llama-3.1) ----------
     if (mode === 'text') {
-      const userMessage = contents?.[0]?.parts?.[0]?.text || 'Hello';
-      
+      const userMessage = contents?.[0]?.parts?.[0]?.text || '';
+      if (!userMessage) {
+        return res.status(200).json({
+          candidates: [{
+            content: {
+              parts: [{ text: "Please provide a message." }]
+            }
+          }]
+        });
+      }
+
+      // Call SiliconFlow API
       const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
         method: 'POST',
         headers: {
@@ -48,7 +60,7 @@ export default async function handler(req, res) {
 
       if (!response.ok) {
         const errorText = await response.text();
-        console.error('SiliconFlow error:', response.status, errorText);
+        console.error('❌ SiliconFlow error:', response.status, errorText);
         return res.status(200).json({
           candidates: [{
             content: {
@@ -59,166 +71,34 @@ export default async function handler(req, res) {
       }
 
       const data = await response.json();
-      const reply = data.choices[0].message.content;
+      const aiResponse = data.choices[0].message.content;
 
+      // Return in Gemini format (what HTML expects)
       return res.status(200).json({
         candidates: [{
           content: {
-            parts: [{ text: reply }]
+            parts: [{ text: aiResponse }]
           }
         }]
       });
     }
 
-    // 🚀 MODE 2: REASONING (DeepSeek-R1)
-    else if (mode === 'reasoning') {
-      const userMessage = contents?.[0]?.parts?.[0]?.text || '';
-      
-      const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.SILICONFLOW_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'deepseek-ai/DeepSeek-R1-Distill-Qwen-7B',
-          messages: [{ role: 'user', content: userMessage }],
-          temperature: 0.6,
-          max_tokens: 4000
-        })
-      });
-
-      if (!response.ok) {
-        return res.status(200).json({
-          candidates: [{
-            content: {
-              parts: [{ text: "माफ कीजिए, reasoning सेवा में समस्या है।" }]
-            }
-          }]
-        });
-      }
-
-      const data = await response.json();
-      const reply = data.choices[0].message.content;
-
-      return res.status(200).json({
-        candidates: [{
-          content: {
-            parts: [{ text: reply }]
-          }
-        }]
-      });
-    }
-
-    // 🚀 MODE 3: VISION (GLM-4V-9B)
-    else if (mode === 'vision') {
-      // Check if there's an image in the request
-      const hasImage = contents?.[0]?.parts?.some(part => part.image);
-      
-      if (hasImage) {
-        const messages = [{
-          role: 'user',
-          content: contents[0].parts.map(part => 
-            part.image ? {
-              type: 'image_url',
-              image_url: { url: part.image }
-            } : {
-              type: 'text',
-              text: part.text
-            }
-          )
-        }];
-
-        const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.SILICONFLOW_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: 'THUDM/glm-4v-9b',
-            messages: messages,
-            temperature: 0.7,
-            max_tokens: 2000
-          })
-        });
-
-        if (!response.ok) {
-          return res.status(200).json({
-            candidates: [{
-              content: {
-                parts: [{ text: "माफ कीजिए, vision सेवा में समस्या है।" }]
-              }
-            }]
-          });
-        }
-
-        const data = await response.json();
-        const reply = data.choices[0].message.content;
-
-        return res.status(200).json({
-          candidates: [{
-            content: {
-              parts: [{ text: reply }]
-            }
-          }]
-        });
-      } else {
-        // No image, fallback to text mode
-        const userMessage = contents?.[0]?.parts?.[0]?.text || '';
-        
-        const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${process.env.SILICONFLOW_KEY}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            model: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
-            messages: [{ role: 'user', content: userMessage }],
-            system: systemInstruction,
-            temperature: 0.7,
-            max_tokens: 2000
-          })
-        });
-
-        const data = await response.json();
-        const reply = data.choices[0].message.content;
-
-        return res.status(200).json({
-          candidates: [{
-            content: {
-              parts: [{ text: reply }]
-            }
-          }]
-        });
-      }
-    }
-
-    // 🚀 MODE 4: IMAGE GENERATION (Hugging Face FLUX.1)
+    // ---------- MODE 2: IMAGE GENERATION (Hugging Face - FLUX.1) ----------
     else if (mode === 'image') {
-      if (!prompt) {
-        return res.status(200).json({
-          candidates: [{
-            content: {
-              parts: [{ text: "Please provide a prompt for image generation." }]
-            }
-          }]
-        });
-      }
-
+      const imagePrompt = prompt || "educational diagram";
+      
       const response = await fetch('https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-dev', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${process.env.HF_TOKEN}`,
           'Content-Type': 'application/json'
         },
-        body: JSON.stringify({ inputs: prompt })
+        body: JSON.stringify({ inputs: imagePrompt })
       });
 
       if (!response.ok) {
-        const errorText = await response.text();
-        if (response.status === 503 && errorText.includes('loading')) {
+        // Model loading हो रहा है?
+        if (response.status === 503) {
           return res.status(200).json({
             candidates: [{
               content: {
@@ -230,7 +110,7 @@ export default async function handler(req, res) {
         return res.status(200).json({
           candidates: [{
             content: {
-              parts: [{ text: "माफ कीजिए, image generation में समस्या है।" }]
+              parts: [{ text: "Image generation failed. Please try again." }]
             }
           }]
         });
@@ -239,6 +119,7 @@ export default async function handler(req, res) {
       const imageBuffer = await response.arrayBuffer();
       const base64Image = Buffer.from(imageBuffer).toString('base64');
 
+      // Special format for image generation
       return res.status(200).json({
         predictions: [{
           bytesBase64Encoded: base64Image
@@ -246,9 +127,9 @@ export default async function handler(req, res) {
       });
     }
 
-    // 🚀 MODE 5: TITLE GENERATION (special case for generateSmartTitle)
+    // ---------- MODE 3: TITLE GENERATION (SiliconFlow) ----------
     else if (mode === 'title') {
-      const userMessage = contents?.[0]?.parts?.[0]?.text || '';
+      const text = contents?.[0]?.parts?.[0]?.text || "chat";
       
       const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
         method: 'POST',
@@ -258,7 +139,10 @@ export default async function handler(req, res) {
         },
         body: JSON.stringify({
           model: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
-          messages: [{ role: 'user', content: `Generate a very short title (max 4 words) for this: "${userMessage}"` }],
+          messages: [{ 
+            role: 'user', 
+            content: `Generate a very short title (max 4 words) for this: "${text}"`
+          }],
           temperature: 0.3,
           max_tokens: 30
         })
@@ -267,12 +151,10 @@ export default async function handler(req, res) {
       const data = await response.json();
       const title = data.choices[0].message.content.replace(/["']/g, '').trim();
 
-      return res.status(200).json({
-        text: title
-      });
+      return res.status(200).json({ text: title });
     }
 
-    // Default fallback
+    // ---------- DEFAULT FALLBACK ----------
     return res.status(200).json({
       candidates: [{
         content: {
@@ -282,7 +164,8 @@ export default async function handler(req, res) {
     });
 
   } catch (error) {
-    console.error('Function error:', error);
+    console.error('🔥 Function error:', error);
+    // Always return 200 with friendly message
     return res.status(200).json({
       candidates: [{
         content: {
@@ -291,4 +174,4 @@ export default async function handler(req, res) {
       }]
     });
   }
-          }
+        }
