@@ -1,177 +1,115 @@
-// api/gemini.js - FINAL PRODUCTION VERSION
-// SiliconFlow + Hugging Face - Zero Cost, Maximum Power
+// api/gemini.js  (Vercel / Netlify compatible)
 
 export default async function handler(req, res) {
-  // CORS headers - browser access के लिए जरूरी
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "POST, OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 
-  // Handle preflight OPTIONS request
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
-  // Only allow POST
-  if (req.method !== 'POST') {
-    return res.status(200).json({
-      candidates: [{
-        content: {
-          parts: [{ text: "Method not allowed. Please use POST." }]
-        }
-      }]
-    });
+  if (req.method === "OPTIONS") return res.status(200).end();
+  if (req.method !== "POST") {
+    return res.status(405).json({ error: "Method Not Allowed" });
   }
 
   try {
-    const payload = req.body;
-    console.log('📥 Received:', JSON.stringify(payload).substring(0, 200));
+    const body =
+      typeof req.body === "string" ? JSON.parse(req.body) : req.body;
 
-    const { mode, contents, prompt, systemInstruction } = payload;
+    const userMessage =
+      body?.contents?.[0]?.parts?.[0]?.text || body?.prompt;
 
-    // ---------- MODE 1: TEXT / CHAT (SiliconFlow - Llama-3.1) ----------
-    if (mode === 'text') {
-      const userMessage = contents?.[0]?.parts?.[0]?.text || '';
-      if (!userMessage) {
-        return res.status(200).json({
-          candidates: [{
-            content: {
-              parts: [{ text: "Please provide a message." }]
-            }
-          }]
-        });
-      }
-
-      // Call SiliconFlow API
-      const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.SILICONFLOW_KEY}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          model: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
-          messages: [{ role: 'user', content: userMessage }],
-          system: systemInstruction,
-          temperature: 0.7,
-          max_tokens: 2000
-        })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ SiliconFlow error:', response.status, errorText);
-        return res.status(200).json({
-          candidates: [{
-            content: {
-              parts: [{ text: "माफ कीजिए, AI सेवा में समस्या है। कृपया थोड़ी देर में प्रयास करें। 🙏" }]
-            }
-          }]
-        });
-      }
-
-      const data = await response.json();
-      const aiResponse = data.choices[0].message.content;
-
-      // Return in Gemini format (what HTML expects)
-      return res.status(200).json({
-        candidates: [{
-          content: {
-            parts: [{ text: aiResponse }]
-          }
-        }]
-      });
+    if (!userMessage) {
+      return res.status(400).json({ error: "Empty user message" });
     }
 
-    // ---------- MODE 2: IMAGE GENERATION (Hugging Face - FLUX.1) ----------
-    else if (mode === 'image') {
-      const imagePrompt = prompt || "educational diagram";
-      
-      const response = await fetch('https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-dev', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.HF_TOKEN}`,
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({ inputs: imagePrompt })
-      });
+    /* ======================================================
+       1️⃣ TRY SILICONFLOW (PRIMARY – VERY POWERFUL)
+    ====================================================== */
+    try {
+      const sfRes = await fetch(
+        "https://api.siliconflow.cn/v1/chat/completions",
+        {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${process.env.SILICONFLOW_API_KEY}`,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model: "deepseek-ai/DeepSeek-V3",
+            messages: [
+              { role: "system", content: "You are an Indian school teacher. Answer from syllabus only." },
+              { role: "user", content: userMessage }
+            ],
+            temperature: 0.4
+          })
+        }
+      );
 
-      if (!response.ok) {
-        // Model loading हो रहा है?
-        if (response.status === 503) {
+      if (sfRes.ok) {
+        const sfData = await sfRes.json();
+        const answer =
+          sfData?.choices?.[0]?.message?.content;
+
+        if (answer) {
           return res.status(200).json({
-            candidates: [{
-              content: {
-                parts: [{ text: "⏳ Image model is loading. Please try again in 20 seconds." }]
+            choices: [
+              {
+                message: { content: answer }
               }
-            }]
+            ]
           });
         }
-        return res.status(200).json({
-          candidates: [{
-            content: {
-              parts: [{ text: "Image generation failed. Please try again." }]
-            }
-          }]
-        });
       }
-
-      const imageBuffer = await response.arrayBuffer();
-      const base64Image = Buffer.from(imageBuffer).toString('base64');
-
-      // Special format for image generation
-      return res.status(200).json({
-        predictions: [{
-          bytesBase64Encoded: base64Image
-        }]
-      });
+    } catch (e) {
+      console.warn("SiliconFlow failed, switching to HF");
     }
 
-    // ---------- MODE 3: TITLE GENERATION (SiliconFlow) ----------
-    else if (mode === 'title') {
-      const text = contents?.[0]?.parts?.[0]?.text || "chat";
-      
-      const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
-        method: 'POST',
+    /* ======================================================
+       2️⃣ FALLBACK: HUGGINGFACE (STABLE)
+    ====================================================== */
+    const hfRes = await fetch(
+      "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
+      {
+        method: "POST",
         headers: {
-          'Authorization': `Bearer ${process.env.SILICONFLOW_KEY}`,
-          'Content-Type': 'application/json'
+          "Authorization": `Bearer ${process.env.HUGGINGFACE_API_KEY}`,
+          "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          model: 'meta-llama/Meta-Llama-3.1-8B-Instruct',
-          messages: [{ 
-            role: 'user', 
-            content: `Generate a very short title (max 4 words) for this: "${text}"`
-          }],
-          temperature: 0.3,
-          max_tokens: 30
+          inputs: userMessage,
+          parameters: {
+            max_new_tokens: 512,
+            temperature: 0.4
+          }
         })
-      });
+      }
+    );
 
-      const data = await response.json();
-      const title = data.choices[0].message.content.replace(/["']/g, '').trim();
+    const hfData = await hfRes.json();
+    const hfText =
+      Array.isArray(hfData)
+        ? hfData[0]?.generated_text
+        : hfData?.generated_text;
 
-      return res.status(200).json({ text: title });
-    }
-
-    // ---------- DEFAULT FALLBACK ----------
     return res.status(200).json({
-      candidates: [{
-        content: {
-          parts: [{ text: "Namaste! Main PadhaiSetu hoon. Aapki kya madad kar sakta hoon?" }]
+      choices: [
+        {
+          message: {
+            content: hfText || "Answer unavailable"
+          }
         }
-      }]
+      ]
     });
 
-  } catch (error) {
-    console.error('🔥 Function error:', error);
-    // Always return 200 with friendly message
-    return res.status(200).json({
-      candidates: [{
-        content: {
-          parts: [{ text: "माफ कीजिए, कुछ तकनीकी दिक्कत है। कृपया थोड़ी देर में फिर से कोशिश करें। 🙏" }]
+  } catch (err) {
+    console.error("Backend crash:", err);
+    return res.status(500).json({
+      choices: [
+        {
+          message: {
+            content: "Server error. Please try again."
+          }
         }
-      }]
+      ]
     });
   }
-        }
+                                }
